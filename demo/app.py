@@ -25,7 +25,7 @@ if "FRED_API_KEY" in st.secrets:
 else:
     fred_key = st.sidebar.text_input("請輸入 FRED API Key:", type="password")
 
-# 2. Gemini 金鑰讀取 (原生相容 AQ. 開頭的新版授權金鑰)
+# 2. Gemini 金鑰讀取 (相容 AQ. 開頭之新版金鑰)
 if "GEMINI_API_KEY" in st.secrets:
     gemini_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("已自動讀取 Gemini API Key")
@@ -140,7 +140,7 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (極速流式輸出與自動備援架構)
+        # AI 總體經濟即時短評 (鎖定官方指定 gemini-3.8-flash)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
@@ -171,27 +171,23 @@ if fred_key:
 2. 聯邦基金利率與貨幣政策預期。
 3. 殖利率曲線（10Y-2Y 利差）對風險資產之意涵。
 """
-                    # 串流產生器（流式逐字傳遞）
+
+                    # 串流產生器（流式逐字傳遞輸出）
                     def stream_generator():
-                        # 優先調用推論反應最快的 2.0-flash，若遭遇 503 等高峰期則備援至 1.5-flash
-                        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
-                        for model_name in candidate_models:
-                            try:
-                                response_stream = client.models.generate_content_stream(
-                                    model=model_name,
-                                    contents=prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.2,
-                                        max_output_tokens=300,
-                                    )
+                        try:
+                            response_stream = client.models.generate_content_stream(
+                                model="gemini-3.8-flash",
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.2,
+                                    max_output_tokens=300,
                                 )
-                                for chunk in response_stream:
-                                    if chunk.text:
-                                        yield chunk.text
-                                return
-                            except Exception:
-                                continue
-                        yield "⚠️ 模型服務目前處於極度尖峰狀態，請稍候重試。"
+                            )
+                            for chunk in response_stream:
+                                if chunk.text:
+                                    yield chunk.text
+                        except Exception as err:
+                            yield f"連線異常，訊息：{err}"
 
                     st.success("✅ AI 總經短評即時分析：")
                     st.write_stream(stream_generator)
