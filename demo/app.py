@@ -26,7 +26,7 @@ if "FRED_API_KEY" in st.secrets:
 else:
     fred_key = st.sidebar.text_input("請輸入 FRED API Key:", type="password")
 
-# 2. Gemini 金鑰讀取 (相容 AQ. 開頭之新版金鑰)
+# 2. Gemini 金鑰讀取 (相容 AQ. 開頭之新版授權金鑰)
 if "GEMINI_API_KEY" in st.secrets:
     gemini_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("已自動讀取 Gemini API Key")
@@ -141,7 +141,7 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (含 503 自動重試與多模型輪替)
+        # AI 總體經濟即時短評 (完整繁體中文、防截斷與彈性備援架構)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
@@ -157,20 +157,20 @@ if fred_key:
                     client = genai.Client(api_key=active_key)
 
                     prompt = f"""
-你是一位資深全球宏觀經濟分析師。請依據以下儀表板抓取的最新指標，直接生成一份繁體中文的精簡短評（150 字以內，直入主題重點，不要寒暄客套）：
+你是一位專業的總體經濟分析師。請全程使用繁體中文，針對以下最新指標撰寫一份 200 字左右的市場短評。嚴格禁止輸出英文提示詞或中途截斷：
 
-【最新指標數據】
+【當前總體經濟指標數據】
 - 美國 CPI 物價指數：{latest_cpi:.1f}（前值 {cpi_prev:.1f}）
 - 美國失業率：{latest_unemp:.1f}%、聯邦基金利率：{latest_fed:.2f}%
-- 10Y 美債殖利率：{latest_10y:.2f}%、2Y 美債殖利率：{latest_2y:.2f}%
-- 10Y-2Y 美債利差：{latest_spread:+.2f}%（{'倒掛狀態' if latest_spread < 0 else '正常正斜率'}）
-- 日本 10Y 國債殖利率：{latest_jp:.3f}%
+- 10 年期美債殖利率：{latest_10y:.2f}%、2 年期美債殖利率：{latest_2y:.2f}%
+- 10Y-2Y 美債利差：{latest_spread:+.2f}%（{'倒掛狀態' if latest_spread < 0 else '正斜率擴張'}）
+- 日本 10 年期國債殖利率：{latest_jp:.3f}%
 
-【短評要求】
-以 3 點條列式（Bullet points）精要分析：
-1. 通膨趨勢與就業彈性。
-2. 聯邦基金利率與貨幣政策預期。
-3. 殖利率曲線（10Y-2Y 利差）對風險資產之意涵。
+【短評格式要求】
+請條列 3 點清晰重點：
+1. 通膨動能與勞動市場現況分析
+2. 基準利率走向與貨幣政策預期
+3. 美債殖利率曲線（利差狀態）對風險資產配置的意涵
 """
 
                     # 串流產生器（具備 503 自動重試與多模型輪替）
@@ -185,8 +185,8 @@ if fred_key:
                                         model=target_model,
                                         contents=prompt,
                                         config=types.GenerateContentConfig(
-                                            temperature=0.2,
-                                            max_output_tokens=300,
+                                            temperature=0.3,
+                                            max_output_tokens=800,  # 提高 token 上限，防止輸出被截斷
                                         )
                                     )
                                     has_content = False
