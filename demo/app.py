@@ -102,6 +102,12 @@ if fred_key:
         latest_unemp = macro_df["美國失業率"].dropna().iloc[-1]
         latest_fed = macro_df["聯邦基金利率"].dropna().iloc[-1]
 
+        # 擷取最新金融資產價格
+        gold_price = market_df["黃金現貨 (GC=F)"].dropna().iloc[-1] if "黃金現貨 (GC=F)" in market_df else 0.0
+        oil_price = market_df["布蘭特原油"].dropna().iloc[-1] if "布蘭特原油" in market_df else 0.0
+        sp500_price = market_df["S&P 500"].dropna().iloc[-1] if "S&P 500" in market_df else 0.0
+        twd_rate = market_df["美元/台幣匯率"].dropna().iloc[-1] if "美元/台幣匯率" in market_df else 0.0
+
         # 殖利率曲線倒掛警示
         if latest_spread < 0:
             st.error(
@@ -141,73 +147,104 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (完整繁體中文、防截斷與彈性備援架構)
+        # AI 總體經濟深度戰略報告 (投行級完整長篇研報)
         # -------------------------------------------------------------
         st.write("---")
-        st.subheader("🤖 AI 總體經濟即時觀點")
-        st.caption("點擊按鈕調用 Gemini 依據當前最新總經與公債數據生成 150～200 字極速精簡市場短評。")
+        st.subheader("🏛️ AI 全球總體經濟與跨資產配置深度戰略研報")
+        st.caption("結合最新 FRED 總經指標與 yfinance 市場高頻價格，由 Gemini 生成結構化深度投資策略報告。")
 
-        if st.button("產生 AI 總體經濟摘要", type="primary"):
+        if st.button("生成全球總體經濟深度戰略研報", type="primary"):
             active_key = gemini_key.strip().replace('"', '').replace("'", "") if gemini_key else ""
             
             if not active_key:
                 st.warning("⚠️ 請先在側邊欄輸入 Gemini API Key，或於 secrets.toml 中配置 GEMINI_API_KEY。")
             else:
-                try:
-                    client = genai.Client(api_key=active_key)
+                with st.spinner("AI 正在交叉計算利差、通膨預期與跨資產定價模型，撰寫深度研報中，請稍候約 10～15 秒..."):
+                    try:
+                        client = genai.Client(api_key=active_key)
 
-                    prompt = f"""
-你是一位專業的總體經濟分析師。請全程使用繁體中文，針對以下最新指標撰寫一份 200 字左右的市場短評。嚴格禁止輸出英文提示詞或中途截斷：
+                        prompt = f"""
+你是一位任職於華爾街頂級投資銀行（如高盛、摩根士丹利）的全球首席宏觀策略師與資產配置主管。請依據以下儀表板最新抓取到的關鍵總經指標與跨市場資產價格，為機構投資委員會撰寫一份權威、深度且結構完備的**全球總體經濟與跨資產配置戰略研報**（約 800～1200 字繁體中文）：
 
-【當前總體經濟指標數據】
-- 美國 CPI 物價指數：{latest_cpi:.1f}（前值 {cpi_prev:.1f}）
-- 美國失業率：{latest_unemp:.1f}%、聯邦基金利率：{latest_fed:.2f}%
-- 10 年期美債殖利率：{latest_10y:.2f}%、2 年期美債殖利率：{latest_2y:.2f}%
-- 10Y-2Y 美債利差：{latest_spread:+.2f}%（{'倒掛狀態' if latest_spread < 0 else '正斜率擴張'}）
-- 日本 10 年期國債殖利率：{latest_jp:.3f}%
+【系統即時監控數據矩陣】
+1. 貨幣與利率指標：
+   - 聯邦基金利率 (Fed Funds Rate)：{latest_fed:.2f}%
+   - 美國 10 年期國債殖利率 (DGS10)：{latest_10y:.2f}%（前值 {prev_10y:.2f}%）
+   - 美國 2 年期國債殖利率 (DGS2)：{latest_2y:.2f}%（前值 {prev_2y:.2f}%）
+   - 10Y-2Y 美債利差 (Yield Curve Spread)：{latest_spread:+.2f}%（曲線狀態：{'殖利率曲線倒掛 Inverted' if latest_spread < 0 else '殖利率曲線正斜率 Normal/Steepening'}）
+   - 日本 10 年期國債殖利率 (JGB 10Y)：{latest_jp:.3f}%（前值 {jp_prev:.3f}%）
+2. 通膨與實體景氣指標：
+   - 美國 CPI 消費者物價指數：{latest_cpi:.1f}（前值 {cpi_prev:.1f}）
+   - 美國失業率 (Unemployment Rate)：{latest_unemp:.1f}%
+3. 金融市場即時資產價格：
+   - 標普 500 指數 (S&P 500)：{sp500_price:.2f} 點
+   - 黃金現貨 (Gold GC=F)：{gold_price:.2f} 美元/盎司
+   - 布蘭特原油 (Brent Crude BZ=F)：{oil_price:.2f} 美元/桶
+   - 美元兌新台幣 (USD/TWD)：{twd_rate:.3f}
 
-【短評格式要求】
-請條列 3 點清晰重點：
-1. 通膨動能與勞動市場現況分析
-2. 基準利率走向與貨幣政策預期
-3. 美債殖利率曲線（利差狀態）對風險資產配置的意涵
+---
+
+【研報寫作格式與深度論述要求】
+請嚴格全程使用正體中文，並依照以下五大結構區塊進行深度剖析：
+
+## 一、即時總體經濟與資產價格監控表
+請使用 Markdown 表格整理以上數據，包含「指標項目」、「最新數值」、「前期/對照數值」、「總經意涵評估」四個欄位。
+
+## 二、通膨黏性與勞動市場韌性（軟著陸 vs 硬著陸剖析）
+1. 深入分析 CPI 物價指數的邊際變動趨勢，結合失業率評估菲利浦曲線（Phillips Curve）當前表現。
+2. 評估實質利率水準（聯邦基金利率減去通膨）對實體經濟與企業資本支出（CapEx）的限制性約束。
+
+## 三、央行政策路徑與全球利差交易（Carry Trade）外溢效應
+1. 解構當前 10Y-2Y 利差結構背後所反映的降息/升息預期。
+2. 重點剖析美日 10 年期公債利差（目前美債 {latest_10y:.2f}% vs 日債 {latest_jp:.3f}%）對全球流動性與日圓套利交易平倉（Carry Trade Unwind）風險之實質影響。
+
+## 四、宏觀情境機率預測模型
+請給出未來 6～12 個月的總經情境機率分佈並逐一分析：
+- **基準情境 (Base Case, 機率 %)**：軟著陸或溫和放緩之政策路徑與市場反應。
+- **樂觀情境 (Bull Case, 機率 %)**：生產力提升帶動非通膨性成長。
+- **悲觀情境 (Bear Case, 機率 %)**：停滯性通膨或深度倒掛引發衰退。
+
+## 五、跨資產配置策略矩陣與投資建議
+請提供明確的資產配置權重（建議配置比例 %，總和為 100%），並分別針對以下各類別給出攻守策略：
+1. **美股/權益資產**（特別評估科技大型股與價值防禦股）
+2. **固定收益/公債**（短天期現金管理 vs 長天期美債資本利得布局）
+3. **大宗商品**（黃金避險抗通膨定價 vs 原油景氣需求定價）
+4. **外匯策略**（美元指數走勢與新台幣匯率波動防禦）
 """
 
-                    # 串流產生器（具備 503 自動重試與多模型輪替）
-                    def stream_generator():
                         models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+                        full_report = None
                         last_error = None
 
                         for target_model in models_to_try:
                             for attempt in range(2):
                                 try:
-                                    response_stream = client.models.generate_content_stream(
+                                    response = client.models.generate_content(
                                         model=target_model,
                                         contents=prompt,
                                         config=types.GenerateContentConfig(
                                             temperature=0.3,
-                                            max_output_tokens=800,  # 提高 token 上限，防止輸出被截斷
+                                            max_output_tokens=4096,  # 擴展至最大上限，確保巨篇深度研報完整生成
                                         )
                                     )
-                                    has_content = False
-                                    for chunk in response_stream:
-                                        if chunk.text:
-                                            has_content = True
-                                            yield chunk.text
-                                    if has_content:
-                                        return
+                                    if response and response.text:
+                                        full_report = response.text
+                                        break
                                 except Exception as err:
                                     last_error = err
                                     time.sleep(1.2)
                                     continue
+                            if full_report:
+                                break
 
-                        yield f"⚠️ 伺服器尖峰繁忙，請稍候重試。訊息：{last_error}"
+                        if full_report:
+                            st.success("✅ 全球總體經濟與跨資產配置深度戰略研報已成功生成：")
+                            st.markdown(full_report)
+                        else:
+                            st.error(f"⚠️ 伺服器尖峰繁忙，生成失敗：{last_error}")
 
-                    st.success("✅ AI 總經短評即時分析：")
-                    st.write_stream(stream_generator)
-
-                except Exception as ai_err:
-                    st.error(f"調用 Gemini 生成失敗，錯誤訊息：{ai_err}")
+                    except Exception as ai_err:
+                        st.error(f"調用 Gemini 生成失敗，錯誤訊息：{ai_err}")
 
     except Exception as e:
         st.error(f"數據讀取失敗，請確認 FRED API Key 是否正確。錯誤訊息: {e}")
