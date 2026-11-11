@@ -121,4 +121,148 @@ if fred_key:
             )
         else:
             st.info(
-                f"💡 **殖利率曲線維持正斜率**：當前 10Y-
+                f"💡 **殖利率曲線維持正斜率**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**。"
+            )
+
+        # 核心 KPI 卡片 (第一排：債券與利率)
+        st.subheader("📊 關鍵公債與利率指標 (FRED)")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("10年期美債", f"{latest_10y:.2f}%", f"{latest_10y - prev_10y:+.2f}%")
+        col2.metric("2年期美債", f"{latest_2y:.2f}%", f"{latest_2y - prev_2y:+.2f}%")
+        col3.metric("10Y-2Y 利差", f"{latest_spread:.2f}%", f"{latest_spread - spread_prev:+.2f}%")
+        col4.metric("日本10Y國債", f"{latest_jp:.3f}%", f"{latest_jp - jp_prev:+.3f}%")
+        col5.metric("聯邦基金利率", f"{latest_fed:.2f}%")
+
+        # 核心 KPI 卡片 (第二排：通膨與就業)
+        st.subheader("📈 關鍵通膨、就業與資產現價")
+        kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+        kpi_col1.metric("CPI 物價指數", f"{latest_cpi:.1f}", f"{latest_cpi - cpi_prev:+.1f}")
+        kpi_col2.metric("核心 CPI 指數", f"{latest_core_cpi:.1f}")
+        kpi_col3.metric("美國失業率", f"{latest_unemp:.1f}%")
+        
+        gold_val = market_df["黃金現貨 (Gold GC=F)"].dropna().iloc[-1] if "黃金現貨 (Gold GC=F)" in market_df else 0.0
+        oil_val = market_df["布蘭特原油 (Brent Crude)"].dropna().iloc[-1] if "布蘭特原油 (Brent Crude)" in market_df else 0.0
+        kpi_col4.metric("黃金現貨 (GC=F)", f"${gold_val:.1f}")
+        kpi_col5.metric("布蘭特原油", f"${oil_val:.1f}")
+
+        # -------------------------------------------------------------
+        # 原本直觀的走勢圖分析專區 (豐富指標秒級切換)
+        # -------------------------------------------------------------
+        st.write("---")
+        st.subheader("📈 市場走勢與總體指標互動折線圖")
+
+        tab1, tab2 = st.tabs(["🏛️ 金融市場資產走勢 (yfinance)", "📊 總體經濟與利率走勢 (FRED)"])
+
+        with tab1:
+            st.caption("即時追蹤美股、台股、大宗商品（黃金/原油）、加密貨幣與匯率走勢")
+            market_choice = st.selectbox(
+                "選擇金融市場標的：", 
+                options=market_df.columns.tolist(), 
+                key="market_select"
+            )
+            fig1 = px.line(
+                market_df, 
+                y=market_choice, 
+                title=f"【{market_choice}】近一年價格歷史走勢"
+            )
+            fig1.update_layout(
+                hovermode="x unified", 
+                xaxis_title="日期", 
+                yaxis_title="價格 / 點數 / 匯率",
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+
+        with tab2:
+            st.caption("即時追蹤美債各天期殖利率、日本國債、利差倒掛走勢與通膨/失業率")
+            macro_choice = st.selectbox(
+                "選擇總體經濟指標：", 
+                options=macro_df.columns.tolist(), 
+                key="macro_select"
+            )
+            fig2 = px.line(
+                macro_df, 
+                y=macro_choice, 
+                title=f"【{macro_choice}】近一年歷史走勢"
+            )
+            fig2.update_layout(
+                hovermode="x unified", 
+                xaxis_title="日期", 
+                yaxis_title="數值 / %",
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # -------------------------------------------------------------
+        # AI 總體經濟即時短評 (約 200 字，要點精確、防截斷)
+        # -------------------------------------------------------------
+        st.write("---")
+        st.subheader("🤖 AI 總體經濟即時觀點")
+        st.caption("點擊按鈕調用 Gemini 依據當前最新總經與金融指標生成約 200 字精闢短評。")
+
+        if st.button("產生 AI 總體經濟摘要", type="primary"):
+            active_key = gemini_key.strip().replace('"', '').replace("'", "") if gemini_key else ""
+            
+            if not active_key:
+                st.warning("⚠️ 請先在側邊欄輸入 Gemini API Key，或於 secrets.toml 中配置 GEMINI_API_KEY。")
+            else:
+                with st.spinner("AI 正在分析總經指標並撰寫短評..."):
+                    try:
+                        client = genai.Client(api_key=active_key)
+
+                        prompt = f"""
+你是一位資深總體經濟策略師。請依據以下最新多項總經與金融指標，以正體中文撰寫一份約 200 字以內的精準短評，不要客套寒暄，直接依序列出 3 點結論：
+
+【當前即時指標監控】
+- 美國 CPI 物價指數：{latest_cpi:.1f}（核心 CPI：{latest_core_cpi:.1f}）
+- 美國失業率：{latest_unemp:.1f}%、聯邦基金利率：{latest_fed:.2f}%
+- 10 年期美債：{latest_10y:.2f}%、2 年期美債：{latest_2y:.2f}%
+- 10Y-2Y 美債利差：{latest_spread:+.2f}%（{'倒掛狀態' if latest_spread < 0 else '正斜率擴張'}）
+- 日本 10 年期國債殖利率：{latest_jp:.3f}%
+- 黃金現貨：${gold_val:.1f}、布蘭特原油：${oil_val:.1f}
+
+【撰寫格式要求】
+請提供清晰的 3 點 bullet points：
+1. 通膨與勞動市場景氣現況評估
+2. 利率路徑與美日利差對資金流向的影響
+3. 殖利率曲線與黃金/原油對跨資產配置的一句話建議
+"""
+
+                        models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+                        full_report = None
+                        last_error = None
+
+                        for target_model in models_to_try:
+                            for attempt in range(2):
+                                try:
+                                    response = client.models.generate_content(
+                                        model=target_model,
+                                        contents=prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.2,
+                                            max_output_tokens=600,
+                                        )
+                                    )
+                                    if response and response.text:
+                                        full_report = response.text
+                                        break
+                                except Exception as err:
+                                    last_error = err
+                                    time.sleep(1.2)
+                                    continue
+                            if full_report:
+                                break
+
+                        if full_report:
+                            st.success("✅ AI 總經短評生成完畢：")
+                            st.markdown(full_report)
+                        else:
+                            st.error(f"⚠️ 伺服器尖峰繁忙，生成失敗：{last_error}")
+
+                    except Exception as ai_err:
+                        st.error(f"調用 Gemini 生成失敗，錯誤訊息：{ai_err}")
+
+    except Exception as e:
+        st.error(f"數據讀取失敗，請確認 FRED API Key 是否正確。錯誤訊息: {e}")
+else:
+    st.info("👈 請在左側輸入您的 FRED API Key 以開啟儀表板。")
