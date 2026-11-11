@@ -6,6 +6,7 @@ import yfinance as yf
 from fredapi import Fred
 from google import genai
 from google.genai import types
+import time
 
 # -------------------------------------------------------------
 # 頁面基本配置
@@ -140,7 +141,7 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (鎖定官方指定 gemini-3.8-flash)
+        # AI 總體經濟即時短評 (含 503 自動重試與多模型輪替)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
@@ -172,22 +173,35 @@ if fred_key:
 3. 殖利率曲線（10Y-2Y 利差）對風險資產之意涵。
 """
 
-                    # 串流產生器（流式逐字傳遞輸出）
+                    # 串流產生器（具備 503 自動重試與多模型輪替）
                     def stream_generator():
-                        try:
-                            response_stream = client.models.generate_content_stream(
-                                model="gemini-3.8-flash",
-                                contents=prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.2,
-                                    max_output_tokens=300,
-                                )
-                            )
-                            for chunk in response_stream:
-                                if chunk.text:
-                                    yield chunk.text
-                        except Exception as err:
-                            yield f"連線異常，訊息：{err}"
+                        models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+                        last_error = None
+
+                        for target_model in models_to_try:
+                            for attempt in range(2):
+                                try:
+                                    response_stream = client.models.generate_content_stream(
+                                        model=target_model,
+                                        contents=prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.2,
+                                            max_output_tokens=300,
+                                        )
+                                    )
+                                    has_content = False
+                                    for chunk in response_stream:
+                                        if chunk.text:
+                                            has_content = True
+                                            yield chunk.text
+                                    if has_content:
+                                        return
+                                except Exception as err:
+                                    last_error = err
+                                    time.sleep(1.2)
+                                    continue
+
+                        yield f"⚠️ 伺服器尖峰繁忙，請稍候重試。訊息：{last_error}"
 
                     st.success("✅ AI 總經短評即時分析：")
                     st.write_stream(stream_generator)
