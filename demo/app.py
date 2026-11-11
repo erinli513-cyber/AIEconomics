@@ -116,13 +116,9 @@ if fred_key:
 
         # 殖利率曲線倒掛警示
         if latest_spread < 0:
-            st.error(
-                f"🚨 **殖利率曲線倒掛警示 (Yield Curve Inverted)**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**（低於 0），請留意經濟衰退訊號。"
-            )
+            st.error(f"🚨 **殖利率曲線倒掛警示 (Yield Curve Inverted)**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**（低於 0），請留意經濟衰退訊號。")
         else:
-            st.info(
-                f"💡 **殖利率曲線維持正斜率**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**。"
-            )
+            st.info(f"💡 **殖利率曲線維持正斜率**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**。")
 
         # 核心 KPI 卡片 (第一排：債券與利率)
         st.subheader("📊 關鍵公債與利率指標 (FRED)")
@@ -146,7 +142,7 @@ if fred_key:
         kpi_col5.metric("布蘭特原油", f"${oil_val:.1f}")
 
         # -------------------------------------------------------------
-        # 原本直觀的走勢圖分析專區 (豐富指標秒級切換)
+        # 市場走勢圖分析專區
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("📈 市場走勢與總體指標互動折線圖")
@@ -194,7 +190,7 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (約 200 字，要點精確、防截斷)
+        # AI 總體經濟即時短評 (鎖定官方指定 gemini-3.8-flash)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
@@ -228,30 +224,27 @@ if fred_key:
 3. 殖利率曲線與黃金/原油對跨資產配置的一句話建議
 """
 
-                        models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
                         full_report = None
                         last_error = None
 
-                        for target_model in models_to_try:
-                            for attempt in range(2):
-                                try:
-                                    response = client.models.generate_content(
-                                        model=target_model,
-                                        contents=prompt,
-                                        config=types.GenerateContentConfig(
-                                            temperature=0.2,
-                                            max_output_tokens=600,
-                                        )
+                        # 鎖定官方指定模型 gemini-3.8-flash，針對 503 重試最多 3 次
+                        for attempt in range(3):
+                            try:
+                                response = client.models.generate_content(
+                                    model="gemini-3.8-flash",
+                                    contents=prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.2,
+                                        max_output_tokens=600,
                                     )
-                                    if response and response.text:
-                                        full_report = response.text
-                                        break
-                                except Exception as err:
-                                    last_error = err
-                                    time.sleep(1.2)
-                                    continue
-                            if full_report:
-                                break
+                                )
+                                if response and response.text:
+                                    full_report = response.text
+                                    break
+                            except Exception as err:
+                                last_error = err
+                                time.sleep(1.5)
+                                continue
 
                         if full_report:
                             st.success("✅ AI 總經短評生成完畢：")
