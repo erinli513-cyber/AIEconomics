@@ -11,7 +11,7 @@ import time
 # -------------------------------------------------------------
 # 頁面基本配置
 # -------------------------------------------------------------
-st.set_page_config(page_title="總體經濟與金融即時儀表板", layout="wide")
+st.set_page_config(page_title="全球總體經濟與金融指標即時儀表板", layout="wide")
 st.title("🌐 全球總體經濟與金融指標即時儀表板")
 
 # -------------------------------------------------------------
@@ -19,14 +19,12 @@ st.title("🌐 全球總體經濟與金融指標即時儀表板")
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ 設定與金鑰")
 
-# 1. FRED 金鑰讀取
 if "FRED_API_KEY" in st.secrets:
     fred_key = st.secrets["FRED_API_KEY"]
     st.sidebar.success("已自動讀取 FRED API Key")
 else:
     fred_key = st.sidebar.text_input("請輸入 FRED API Key:", type="password")
 
-# 2. Gemini 金鑰讀取 (相容 AQ. 開頭之新版授權金鑰)
 if "GEMINI_API_KEY" in st.secrets:
     gemini_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("已自動讀取 Gemini API Key")
@@ -44,8 +42,11 @@ def get_fred_data(api_key):
     fred = Fred(api_key=api_key)
     data = {
         "CPI 物價指數": fred.get_series("CPIAUCSL"),
-        "10年期美債殖利率": fred.get_series("DGS10"),
+        "3個月期美債殖利率": fred.get_series("DGS3MO"),
         "2年期美債殖利率": fred.get_series("DGS2"),
+        "5年期美債殖利率": fred.get_series("DGS5"),
+        "10年期美債殖利率": fred.get_series("DGS10"),
+        "30年期美債殖利率": fred.get_series("DGS30"),
         "日本10年期國債殖利率": fred.get_series("IRLTLT01JPM156N"),
         "美國失業率": fred.get_series("UNRATE"),
         "聯邦基金利率": fred.get_series("FEDFUNDS")
@@ -53,6 +54,8 @@ def get_fred_data(api_key):
     df = pd.DataFrame(data).ffill().tail(365)
     # 計算 10Y - 2Y 美債利差
     df["10Y-2Y 美債利差"] = df["10年期美債殖利率"] - df["2年期美債殖利率"]
+    # 計算 美日 10Y 國債利差
+    df["美日10Y利差"] = df["10年期美債殖利率"] - df["日本10年期國債殖利率"]
     return df
 
 @st.cache_data(ttl=600)
@@ -66,7 +69,6 @@ def get_market_data():
     }
     raw_df = yf.download(list(tickers.values()), period="1y")["Close"]
     
-    # 處理 yfinance 多層索引
     if isinstance(raw_df.columns, pd.MultiIndex):
         raw_df.columns = raw_df.columns.get_level_values(-1)
         
@@ -81,7 +83,7 @@ if fred_key:
         macro_df = get_fred_data(fred_key)
         market_df = get_market_data()
 
-        # 擷取最新總經數值與前期值
+        # 關鍵數值擷取
         latest_cpi = macro_df["CPI 物價指數"].dropna().iloc[-1]
         cpi_prev = macro_df["CPI 物價指數"].dropna().iloc[-2]
 
@@ -102,23 +104,13 @@ if fred_key:
         latest_unemp = macro_df["美國失業率"].dropna().iloc[-1]
         latest_fed = macro_df["聯邦基金利率"].dropna().iloc[-1]
 
-        # 擷取最新金融資產價格
-        gold_price = market_df["黃金現貨 (GC=F)"].dropna().iloc[-1] if "黃金現貨 (GC=F)" in market_df else 0.0
-        oil_price = market_df["布蘭特原油"].dropna().iloc[-1] if "布蘭特原油" in market_df else 0.0
-        sp500_price = market_df["S&P 500"].dropna().iloc[-1] if "S&P 500" in market_df else 0.0
-        twd_rate = market_df["美元/台幣匯率"].dropna().iloc[-1] if "美元/台幣匯率" in market_df else 0.0
-
-        # 殖利率曲線倒掛警示
+        # 殖利率曲線狀態警示條
         if latest_spread < 0:
-            st.error(
-                f"🚨 **殖利率曲線倒掛警示 (Yield Curve Inverted)**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**（低於 0），請留意經濟衰退訊號。"
-            )
+            st.error(f"🚨 **殖利率曲線倒掛警示 (Yield Curve Inverted)**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**（低於 0），請留意經濟衰退訊號。")
         else:
-            st.info(
-                f"💡 **殖利率曲線維持正斜率**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**。"
-            )
+            st.info(f"💡 **殖利率曲線維持正斜率**：當前 10Y-2Y 利差為 **{latest_spread:+.2f}%**。")
 
-        # 核心 KPI 卡片 (6 欄整齊排列)
+        # 核心 KPI 卡片
         st.subheader("📊 關鍵總體經濟與公債指標 (FRED)")
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("10年期美債", f"{latest_10y:.2f}%", f"{latest_10y - prev_10y:+.2f}%")
@@ -128,88 +120,104 @@ if fred_key:
         col5.metric("CPI 物價指數", f"{latest_cpi:.1f}")
         col6.metric("美國失業率", f"{latest_unemp:.1f}%")
 
-        # 圖表區塊
+        # -------------------------------------------------------------
+        # 深度圖表分析專區 (內容擴充)
+        # -------------------------------------------------------------
         st.write("---")
-        st.subheader("📈 市場走勢與總體指標折線圖")
+        st.subheader("📈 深度市場走勢與結構圖表分析")
 
-        tab1, tab2 = st.tabs(["金融市場走勢 (yfinance)", "總體經濟趨勢 (FRED)"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 美國國債殖利率曲線結構", 
+            "🌐 美日10Y利差與套利走勢", 
+            "📈 金融資產多標的報酬率比較", 
+            "📉 單一指標趨勢分析"
+        ])
 
+        # TAB 1: 殖利率曲線天期結構圖 (Yield Curve Shape)
         with tab1:
-            market_choice = st.selectbox("選擇金融市場標的：", market_df.columns, key="market_select")
-            fig1 = px.line(market_df, y=market_choice, title=f"{market_choice} 近一年走勢")
-            fig1.update_layout(hovermode="x unified", xaxis_title="日期", yaxis_title="價格 / 點數")
-            st.plotly_chart(fig1, use_container_width=True)
+            st.markdown("#### 美國國債殖利率天期曲線 (當前 vs 一個月前)")
+            maturities = ["3個月", "2年", "5年", "10年", "30年"]
+            curve_cols = ["3個月期美債殖利率", "2年期美債殖利率", "5年期美債殖利率", "10年期美債殖利率", "30年期美債殖利率"]
+            
+            current_curve = [macro_df[c].dropna().iloc[-1] for c in curve_cols]
+            prev_curve = [macro_df[c].dropna().iloc[-22] for c in curve_cols] if len(macro_df) >= 22 else current_curve
+            
+            fig_curve = go.Figure()
+            fig_curve.add_trace(go.Scatter(x=maturities, y=current_curve, mode='lines+markers', name='當前曲線', line=dict(color='#00CC96', width=3)))
+            fig_curve.add_trace(go.Scatter(x=maturities, y=prev_curve, mode='lines+markers', name='一個月前', line=dict(color='#AB63FA', width=2, dash='dash')))
+            fig_curve.update_layout(xaxis_title="公債天期", yaxis_title="殖利率 (%)", hovermode="x unified")
+            st.plotly_chart(fig_curve, use_container_width=True)
 
+        # TAB 2: 美日利差走勢 (Carry Trade 監測)
         with tab2:
-            macro_choice = st.selectbox("選擇總體經濟指標：", macro_df.columns, key="macro_select")
-            fig2 = px.line(macro_df, y=macro_choice, title=f"{macro_choice} 近一年走勢")
-            fig2.update_layout(hovermode="x unified", xaxis_title="日期", yaxis_title="數值 / %")
-            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown("#### 美國 vs 日本 10 年期公債殖利率及美日利差")
+            fig_spread = go.Figure()
+            fig_spread.add_trace(go.Scatter(x=macro_df.index, y=macro_df["10年期美債殖利率"], mode='lines', name='10年期美債 (%)', line=dict(color='#1f77b4')))
+            fig_spread.add_trace(go.Scatter(x=macro_df.index, y=macro_df["日本10年期國債殖利率"], mode='lines', name='日本10年期國債 (%)', line=dict(color='#ff7f0e')))
+            fig_spread.add_trace(go.Scatter(x=macro_df.index, y=macro_df["美日10Y利差"], mode='lines', name='美日利差 (%)', line=dict(color='#2ca02c', dash='dot')))
+            fig_spread.update_layout(xaxis_title="日期", yaxis_title="殖利率 / 利差 (%)", hovermode="x unified")
+            st.plotly_chart(fig_spread, use_container_width=True)
+
+        # TAB 3: 資產標準化累積報酬率走勢比較 (Normalized Cumulative Return)
+        with tab3:
+            st.markdown("#### 跨市場資產相對漲跌幅比較（基準日設為 100）")
+            selected_assets = st.multiselect(
+                "選擇要比較的市場資產：", 
+                options=market_df.columns.tolist(), 
+                default=["S&P 500", "台灣加權指數", "黃金現貨 (GC=F)"]
+            )
+            if selected_assets:
+                norm_df = market_df[selected_assets].dropna()
+                norm_df = (norm_df / norm_df.iloc[0]) * 100
+                fig_norm = px.line(norm_df, title="資產相對走勢對比 (基期=100)")
+                fig_norm.update_layout(xaxis_title="日期", yaxis_title="標準化點數", hovermode="x unified")
+                st.plotly_chart(fig_norm, use_container_width=True)
+            else:
+                st.warning("請至少勾選一個資產進行比較。")
+
+        # TAB 4: 單一指標自由選
+        with tab4:
+            all_cols = list(market_df.columns) + list(macro_df.columns)
+            choice = st.selectbox("選擇任一指標檢視近一年走勢：", all_cols)
+            if choice in market_df.columns:
+                target_series = market_df[choice]
+            else:
+                target_series = macro_df[choice]
+            fig_single = px.line(target_series, title=f"{choice} 近一年歷史走勢")
+            fig_single.update_layout(xaxis_title="日期", yaxis_title="數值", hovermode="x unified")
+            st.plotly_chart(fig_single, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟深度戰略報告 (投行級完整長篇研報)
+        # AI 總經短評 (精簡版：約 200 字直接給要點)
         # -------------------------------------------------------------
         st.write("---")
-        st.subheader("🏛️ AI 全球總體經濟與跨資產配置深度戰略研報")
-        st.caption("結合最新 FRED 總經指標與 yfinance 市場高頻價格，由 Gemini 生成結構化深度投資策略報告。")
+        st.subheader("🤖 AI 總體經濟即時觀點")
+        st.caption("點擊按鈕調用 Gemini 依據當前最新總經與公債數據生成約 200 字精簡市場短評。")
 
-        if st.button("生成全球總體經濟深度戰略研報", type="primary"):
+        if st.button("產生 AI 總體經濟摘要", type="primary"):
             active_key = gemini_key.strip().replace('"', '').replace("'", "") if gemini_key else ""
             
             if not active_key:
                 st.warning("⚠️ 請先在側邊欄輸入 Gemini API Key，或於 secrets.toml 中配置 GEMINI_API_KEY。")
             else:
-                with st.spinner("AI 正在交叉計算利差、通膨預期與跨資產定價模型，撰寫深度研報中，請稍候約 10～15 秒..."):
+                with st.spinner("AI 正在分析總經指標並撰寫短評..."):
                     try:
                         client = genai.Client(api_key=active_key)
 
                         prompt = f"""
-你是一位任職於華爾街頂級投資銀行（如高盛、摩根士丹利）的全球首席宏觀策略師與資產配置主管。請依據以下儀表板最新抓取到的關鍵總經指標與跨市場資產價格，為機構投資委員會撰寫一份權威、深度且結構完備的**全球總體經濟與跨資產配置戰略研報**（約 800～1200 字繁體中文）：
+你是一位資深總體經濟策略師。請依據以下指標數據，以繁體中文撰寫一份約 200 字以內的精準市場短評，直接列出 3 點結論（不要寒暄客套）：
 
-【系統即時監控數據矩陣】
-1. 貨幣與利率指標：
-   - 聯邦基金利率 (Fed Funds Rate)：{latest_fed:.2f}%
-   - 美國 10 年期國債殖利率 (DGS10)：{latest_10y:.2f}%（前值 {prev_10y:.2f}%）
-   - 美國 2 年期國債殖利率 (DGS2)：{latest_2y:.2f}%（前值 {prev_2y:.2f}%）
-   - 10Y-2Y 美債利差 (Yield Curve Spread)：{latest_spread:+.2f}%（曲線狀態：{'殖利率曲線倒掛 Inverted' if latest_spread < 0 else '殖利率曲線正斜率 Normal/Steepening'}）
-   - 日本 10 年期國債殖利率 (JGB 10Y)：{latest_jp:.3f}%（前值 {jp_prev:.3f}%）
-2. 通膨與實體景氣指標：
-   - 美國 CPI 消費者物價指數：{latest_cpi:.1f}（前值 {cpi_prev:.1f}）
-   - 美國失業率 (Unemployment Rate)：{latest_unemp:.1f}%
-3. 金融市場即時資產價格：
-   - 標普 500 指數 (S&P 500)：{sp500_price:.2f} 點
-   - 黃金現貨 (Gold GC=F)：{gold_price:.2f} 美元/盎司
-   - 布蘭特原油 (Brent Crude BZ=F)：{oil_price:.2f} 美元/桶
-   - 美元兌新台幣 (USD/TWD)：{twd_rate:.3f}
+【最新數據】
+- 美國 CPI 物價指數：{latest_cpi:.1f}
+- 美國失業率：{latest_unemp:.1f}%、聯邦基金利率：{latest_fed:.2f}%
+- 10 年期美債：{latest_10y:.2f}%、2 年期美債：{latest_2y:.2f}%
+- 10Y-2Y 利差：{latest_spread:+.2f}%（{'倒掛' if latest_spread < 0 else '正常正斜率'}）
+- 日本 10 年期國債殖利率：{latest_jp:.3f}%
 
----
-
-【研報寫作格式與深度論述要求】
-請嚴格全程使用正體中文，並依照以下五大結構區塊進行深度剖析：
-
-## 一、即時總體經濟與資產價格監控表
-請使用 Markdown 表格整理以上數據，包含「指標項目」、「最新數值」、「前期/對照數值」、「總經意涵評估」四個欄位。
-
-## 二、通膨黏性與勞動市場韌性（軟著陸 vs 硬著陸剖析）
-1. 深入分析 CPI 物價指數的邊際變動趨勢，結合失業率評估菲利浦曲線（Phillips Curve）當前表現。
-2. 評估實質利率水準（聯邦基金利率減去通膨）對實體經濟與企業資本支出（CapEx）的限制性約束。
-
-## 三、央行政策路徑與全球利差交易（Carry Trade）外溢效應
-1. 解構當前 10Y-2Y 利差結構背後所反映的降息/升息預期。
-2. 重點剖析美日 10 年期公債利差（目前美債 {latest_10y:.2f}% vs 日債 {latest_jp:.3f}%）對全球流動性與日圓套利交易平倉（Carry Trade Unwind）風險之實質影響。
-
-## 四、宏觀情境機率預測模型
-請給出未來 6～12 個月的總經情境機率分佈並逐一分析：
-- **基準情境 (Base Case, 機率 %)**：軟著陸或溫和放緩之政策路徑與市場反應。
-- **樂觀情境 (Bull Case, 機率 %)**：生產力提升帶動非通膨性成長。
-- **悲觀情境 (Bear Case, 機率 %)**：停滯性通膨或深度倒掛引發衰退。
-
-## 五、跨資產配置策略矩陣與投資建議
-請提供明確的資產配置權重（建議配置比例 %，總和為 100%），並分別針對以下各類別給出攻守策略：
-1. **美股/權益資產**（特別評估科技大型股與價值防禦股）
-2. **固定收益/公債**（短天期現金管理 vs 長天期美債資本利得布局）
-3. **大宗商品**（黃金避險抗通膨定價 vs 原油景氣需求定價）
-4. **外匯策略**（美元指數走勢與新台幣匯率波動防禦）
+【短評要求】
+1. 通膨與勞動市場景氣現況
+2. 利率路徑與美日利差影響
+3. 殖利率曲線對資產配置的一句話建議
 """
 
                         models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
@@ -223,8 +231,8 @@ if fred_key:
                                         model=target_model,
                                         contents=prompt,
                                         config=types.GenerateContentConfig(
-                                            temperature=0.3,
-                                            max_output_tokens=4096,  # 擴展至最大上限，確保巨篇深度研報完整生成
+                                            temperature=0.2,
+                                            max_output_tokens=600,
                                         )
                                     )
                                     if response and response.text:
@@ -238,7 +246,7 @@ if fred_key:
                                 break
 
                         if full_report:
-                            st.success("✅ 全球總體經濟與跨資產配置深度戰略研報已成功生成：")
+                            st.success("✅ AI 總經短評生成完畢：")
                             st.markdown(full_report)
                         else:
                             st.error(f"⚠️ 伺服器尖峰繁忙，生成失敗：{last_error}")
