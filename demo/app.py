@@ -4,7 +4,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
 from fredapi import Fred
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # -------------------------------------------------------------
 # 頁面基本配置
@@ -49,7 +50,6 @@ def get_fred_data(api_key):
         "聯邦基金利率": fred.get_series("FEDFUNDS")
     }
     df = pd.DataFrame(data).ffill().tail(365)
-    # 計算 10Y - 2Y 美債利差
     df["10Y-2Y 美債利差"] = df["10年期美債殖利率"] - df["2年期美債殖利率"]
     return df
 
@@ -64,7 +64,6 @@ def get_market_data():
     }
     raw_df = yf.download(list(tickers.values()), period="1y")["Close"]
     
-    # 處理 yfinance 多層索引
     if isinstance(raw_df.columns, pd.MultiIndex):
         raw_df.columns = raw_df.columns.get_level_values(-1)
         
@@ -139,20 +138,22 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評
+        # AI 總體經濟即時短評 (使用新版 google-genai)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
         st.caption("點擊按鈕調用 Gemini 依據當前最新總經與公債數據生成 200 字精簡市場短評。")
 
         if st.button("產生 AI 總體經濟摘要", type="primary"):
-            if not gemini_key:
+            active_key = gemini_key.strip().replace('"', '').replace("'", "") if gemini_key else ""
+            
+            if not active_key:
                 st.warning("⚠️ 請先在側邊欄輸入 Gemini API Key，或於 secrets.toml 中配置 GEMINI_API_KEY。")
             else:
                 with st.spinner("AI 正在分析總經指標並撰寫短評..."):
                     try:
-                        # 1. 配置 Gemini API Key
-                        genai.configure(api_key=gemini_key)
+                        # 1. 建立 Client（完全相容 AQ. 開頭的新版金鑰）
+                        client = genai.Client(api_key=active_key)
 
                         # 2. 構建上下文 Prompt
                         prompt = f"""
@@ -172,11 +173,14 @@ if fred_key:
 2. 針對美債殖利率曲線態勢（利差狀態）對總體景氣或風險資產的意涵給出一句話總結。
 3. 語氣客觀專業，條理分明，不要包含無效客套話，總字數約 200 字。
 """
-                        # 3. 呼叫模型生成短評
-                        model = genai.GenerativeModel("gemini-1.5-flash")
-                        response = model.generate_content(
-                            prompt,
-                            generation_config={"temperature": 0.3, "max_output_tokens": 400}
+                        # 3. 呼叫新版 gemini-2.5-flash 模型
+                        response = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.3,
+                                max_output_tokens=400,
+                            )
                         )
 
                         # 4. 渲染結果
