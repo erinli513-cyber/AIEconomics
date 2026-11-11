@@ -25,7 +25,7 @@ if "FRED_API_KEY" in st.secrets:
 else:
     fred_key = st.sidebar.text_input("請輸入 FRED API Key:", type="password")
 
-# 2. Gemini 金鑰讀取
+# 2. Gemini 金鑰讀取 (原生相容 AQ. 開頭的新版授權金鑰)
 if "GEMINI_API_KEY" in st.secrets:
     gemini_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("已自動讀取 Gemini API Key")
@@ -140,11 +140,11 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (原生支援 AQ. 格式金鑰)
+        # AI 總體經濟即時短評 (極速流式輸出與自動備援架構)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
-        st.caption("點擊按鈕調用 Gemini 依據當前最新總經與公債數據生成 200 字精簡市場短評。")
+        st.caption("點擊按鈕調用 Gemini 依據當前最新總經與公債數據生成 150～200 字極速精簡市場短評。")
 
         if st.button("產生 AI 總體經濟摘要", type="primary"):
             active_key = gemini_key.strip().replace('"', '').replace("'", "") if gemini_key else ""
@@ -152,46 +152,52 @@ if fred_key:
             if not active_key:
                 st.warning("⚠️ 請先在側邊欄輸入 Gemini API Key，或於 secrets.toml 中配置 GEMINI_API_KEY。")
             else:
-                with st.spinner("AI 正在分析總經指標並撰寫短評..."):
-                    try:
-                        # 1. 建立 Client（完全相容 AQ. 開頭的新金鑰）
-                        client = genai.Client(api_key=active_key)
+                try:
+                    client = genai.Client(api_key=active_key)
 
-                        # 2. 構建 Prompt
-                        prompt = f"""
-你是一位專業的全球宏觀經濟與資產配置分析師。請依據以下儀表板抓取到的最新總經數據，撰寫一份繁體中文的總體經濟短評（嚴格控制在 200 字左右）：
+                    prompt = f"""
+你是一位資深全球宏觀經濟分析師。請依據以下儀表板抓取的最新指標，直接生成一份繁體中文的精簡短評（150 字以內，直入主題重點，不要寒暄客套）：
 
-【當前最新總體經濟指標數據】
+【最新指標數據】
 - 美國 CPI 物價指數：{latest_cpi:.1f}（前值 {cpi_prev:.1f}）
-- 美國失業率：{latest_unemp:.1f}%
-- 聯邦基金利率：{latest_fed:.2f}%
-- 10 年期美債殖利率：{latest_10y:.2f}%
-- 2 年期美債殖利率：{latest_2y:.2f}%
+- 美國失業率：{latest_unemp:.1f}%、聯邦基金利率：{latest_fed:.2f}%
+- 10Y 美債殖利率：{latest_10y:.2f}%、2Y 美債殖利率：{latest_2y:.2f}%
 - 10Y-2Y 美債利差：{latest_spread:+.2f}%（{'倒掛狀態' if latest_spread < 0 else '正常正斜率'}）
-- 日本 10 年期國債殖利率：{latest_jp:.3f}%
+- 日本 10Y 國債殖利率：{latest_jp:.3f}%
 
 【短評要求】
-1. 綜合通膨動能、就業市場彈性與聯準會貨幣政策路徑進行簡要評估。
-2. 針對美債殖利率曲線態勢（利差狀態）對總體景氣或風險資產的意涵給出一句話總結。
-3. 語氣客觀專業，條理分明，不要包含無效客套話，總字數約 200 字。
+以 3 點條列式（Bullet points）精要分析：
+1. 通膨趨勢與就業彈性。
+2. 聯邦基金利率與貨幣政策預期。
+3. 殖利率曲線（10Y-2Y 利差）對風險資產之意涵。
 """
+                    # 串流產生器（流式逐字傳遞）
+                    def stream_generator():
+                        # 優先調用推論反應最快的 2.0-flash，若遭遇 503 等高峰期則備援至 1.5-flash
+                        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
+                        for model_name in candidate_models:
+                            try:
+                                response_stream = client.models.generate_content_stream(
+                                    model=model_name,
+                                    contents=prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.2,
+                                        max_output_tokens=300,
+                                    )
+                                )
+                                for chunk in response_stream:
+                                    if chunk.text:
+                                        yield chunk.text
+                                return
+                            except Exception:
+                                continue
+                        yield "⚠️ 模型服務目前處於極度尖峰狀態，請稍候重試。"
 
-                        # 3. 呼叫模型
-                        response = client.models.generate_content(
-                            model="gemini-3.8-flash",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.3,
-                                max_output_tokens=400,
-                            )
-                        )
+                    st.success("✅ AI 總經短評即時分析：")
+                    st.write_stream(stream_generator)
 
-                        # 4. 渲染結果
-                        st.success("✅ AI 總經短評生成完畢：")
-                        st.markdown(response.text)
-
-                    except Exception as ai_err:
-                        st.error(f"調用 Gemini 生成失敗，錯誤訊息：{ai_err}")
+                except Exception as ai_err:
+                    st.error(f"調用 Gemini 生成失敗，錯誤訊息：{ai_err}")
 
     except Exception as e:
         st.error(f"數據讀取失敗，請確認 FRED API Key 是否正確。錯誤訊息: {e}")
