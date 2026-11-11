@@ -50,6 +50,7 @@ def get_fred_data(api_key):
         "聯邦基金利率": fred.get_series("FEDFUNDS")
     }
     df = pd.DataFrame(data).ffill().tail(365)
+    # 計算 10Y - 2Y 美債利差
     df["10Y-2Y 美債利差"] = df["10年期美債殖利率"] - df["2年期美債殖利率"]
     return df
 
@@ -64,6 +65,7 @@ def get_market_data():
     }
     raw_df = yf.download(list(tickers.values()), period="1y")["Close"]
     
+    # 處理 yfinance 多層索引
     if isinstance(raw_df.columns, pd.MultiIndex):
         raw_df.columns = raw_df.columns.get_level_values(-1)
         
@@ -138,7 +140,7 @@ if fred_key:
             st.plotly_chart(fig2, use_container_width=True)
 
         # -------------------------------------------------------------
-        # AI 總體經濟即時短評 (使用新版 google-genai)
+        # AI 總體經濟即時短評 (原生支援 AQ. 格式金鑰)
         # -------------------------------------------------------------
         st.write("---")
         st.subheader("🤖 AI 總體經濟即時觀點")
@@ -152,10 +154,10 @@ if fred_key:
             else:
                 with st.spinner("AI 正在分析總經指標並撰寫短評..."):
                     try:
-                        # 1. 建立 Client（完全相容 AQ. 開頭的新版金鑰）
+                        # 1. 建立 Client（完全相容 AQ. 開頭的新金鑰）
                         client = genai.Client(api_key=active_key)
 
-                        # 2. 構建上下文 Prompt
+                        # 2. 構建 Prompt
                         prompt = f"""
 你是一位專業的全球宏觀經濟與資產配置分析師。請依據以下儀表板抓取到的最新總經數據，撰寫一份繁體中文的總體經濟短評（嚴格控制在 200 字左右）：
 
@@ -173,7 +175,8 @@ if fred_key:
 2. 針對美債殖利率曲線態勢（利差狀態）對總體景氣或風險資產的意涵給出一句話總結。
 3. 語氣客觀專業，條理分明，不要包含無效客套話，總字數約 200 字。
 """
-                        # 3. 呼叫新版 gemini-2.5-flash 模型
+
+                        # 3. 呼叫模型
                         response = client.models.generate_content(
                             model="gemini-2.5-flash",
                             contents=prompt,
