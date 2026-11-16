@@ -19,13 +19,11 @@ st.set_page_config(
 # 2. 自訂極簡專業視覺 CSS（優化卡片邊框、間距與字體層次）
 st.markdown("""
 <style>
-    /* 整體背景與字體微調 */
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2.5rem;
         max-width: 1200px;
     }
-    /* Metric 指標卡片美化 */
     div[data-testid="stMetric"] {
         background-color: #F8F9FA;
         border: 1px solid #E2E8F0;
@@ -43,7 +41,6 @@ st.markdown("""
         font-weight: 700;
         color: #0F172A;
     }
-    /* 分頁標籤樣式優化 */
     button[data-baseweb="tab"] {
         font-size: 1rem;
         font-weight: 600;
@@ -78,7 +75,7 @@ st.sidebar.subheader("📡 市場背離監控狀態")
 sidebar_alert_placeholder = st.sidebar.empty()
 sidebar_alert_placeholder.info("待執行：請切換至第 2 分頁啟動新聞情緒評估。")
 
-# 4. 數據抓取函式庫
+# 4. 數據抓取函式庫（啟用長時間快取，避免按鈕重整時重抓數據）
 @st.cache_data(ttl=7200, show_spinner=False)
 def fetch_market_data():
     fx_jpy = yf.Ticker("JPY=X").history(period="60d")
@@ -126,17 +123,24 @@ def fetch_google_news(keyword="USD JPY Bank of Japan Fed"):
     feed = feedparser.parse(url)
     return [entry.title for entry in feed.entries[:6]]
 
-def generate_formal_report(api_key, prompt):
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20000))
-    cfg = types.GenerateContentConfig(temperature=0.2, max_output_tokens=300)
-    last_err = None
-    for m in ["gemini-3.8-flash", "gemini-3.5-flash"]:
+def generate_formal_report_stream(api_key, prompt):
+    """使用低延遲模型並關閉內部思考延遲，以串流方式即時輸出"""
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=15000))
+    cfg = types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=250,
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+    for m in ["gemini-3.5-flash-lite", "gemini-3.8-flash"]:
         try:
-            res = client.models.generate_content(model=m, contents=prompt, config=cfg)
-            return res.text
-        except Exception as e:
-            last_err = e
-    raise last_err
+            return client.models.generate_content_stream(model=m, contents=prompt, config=cfg)
+        except Exception:
+            try:
+                fallback_cfg = types.GenerateContentConfig(temperature=0.2, max_output_tokens=250)
+                return client.models.generate_content_stream(model=m, contents=prompt, config=fallback_cfg)
+            except Exception:
+                continue
+    raise RuntimeError("無法連線至 Gemini 模型，請檢查 API Key 或網路狀態。")
 
 # 5. 載入市場與總經數據
 df_fx, fx_now, fx_chg_30d, usd_twd_now, df_nikkei = fetch_market_data()
@@ -262,65 +266,69 @@ with tab2:
             if not gemini_key:
                 st.warning("⚠️ 請先於左側邊欄輸入 `GEMINI_API_KEY` 以啟用模型分析。")
             elif st.button("📊 執行市場情緒與背離評估", type="primary", use_container_width=True):
-                with st.spinner("AI 正在彙整央行政策立場與市場情緒指標..."):
-                    news_text = "\n".join([f"- {t}" for t in news_titles])
+                news_text = "\n".join([f"- {t}" for t in news_titles])
+                
+                prompt = (
+                    f"請以專業總體經濟分析師視角，針對以下 6 則國際外匯新聞，聚焦「{analysis_goal}」進行評估（參考數據：USD/JPY 近 30 日變動幅度為 {fx_chg_30d:+.2f}%）：\n"
+                    f"{news_text}\n\n"
+                    f"請嚴格依照下列格式輸出繁體中文報告（總字數控制在 150 字內，語氣客觀精煉）：\n"
+                    f"[SCORE: 整數0到100]\n"
+                    f"- **政策立場**：（說明利多美元或利多日圓，約 25 字）\n"
+                    f"- **核心驅動**：（點出新聞反映的關鍵經濟因素，約 30 字）\n"
+                    f"- **背離診斷**：（比對新聞情緒與近 30 日匯率變動 {fx_chg_30d:+.2f}% 是否一致，約 30 字）"
+                )
+                
+                try:
+                    stream_box = st.empty()
+                    full_text = ""
+                    for chunk in generate_formal_report_stream(gemini_key, prompt):
+                        if chunk.text:
+                            full_text += chunk.text
+                            preview_text = re.sub(r"\[SCORE:\s*\d*\]?\s*", "", full_text)
+                            stream_box.markdown(preview_text + " ▌")
                     
-                    prompt = (
-                        f"請以專業總體經濟分析師視角，針對以下 6 則國際外匯新聞，聚焦「{analysis_goal}」進行評估（參考數據：USD/JPY 近 30 日變動幅度為 {fx_chg_30d:+.2f}%）：\n"
-                        f"{news_text}\n\n"
-                        f"請嚴格依照下列格式輸出繁體中文報告（總字數控制在 150 字內，語氣客觀精煉）：\n"
-                        f"[SCORE: 整數0到100]\n"
-                        f"- **政策立場**：（說明利多美元或利多日圓，約 25 字）\n"
-                        f"- **核心驅動**：（點出新聞反映的關鍵經濟因素，約 30 字）\n"
-                        f"- **背離診斷**：（比對新聞情緒與近 30 日匯率變動 {fx_chg_30d:+.2f}% 是否一致，約 30 字）"
-                    )
+                    score_match = re.search(r"\[SCORE:\s*(\d+)\]", full_text)
+                    ai_score = int(score_match.group(1)) if score_match else 50
+                    clean_report = re.sub(r"\[SCORE:\s*\d+\]\s*", "", full_text).strip()
+                    stream_box.empty()
                     
-                    try:
-                        report_text = generate_formal_report(gemini_key, prompt)
-                        
-                        score_match = re.search(r"\[SCORE:\s*(\d+)\]", report_text)
-                        ai_score = int(score_match.group(1)) if score_match else 50
-                        clean_report = re.sub(r"\[SCORE:\s*\d+\]\s*", "", report_text).strip()
-                        
-                        if ai_score >= 65:
-                            sentiment_label = "偏多美元（鷹派預期強）"
-                        elif ai_score >= 55:
-                            sentiment_label = "溫和偏多美元"
-                        elif ai_score <= 35:
-                            sentiment_label = "偏空美元（日圓看升）"
-                        elif ai_score <= 45:
-                            sentiment_label = "溫和偏空美元"
-                        else:
-                            sentiment_label = "多空均衡（中性觀望）"
+                    if ai_score >= 65:
+                        sentiment_label = "偏多美元（鷹派預期強）"
+                    elif ai_score >= 55:
+                        sentiment_label = "溫和偏多美元"
+                    elif ai_score <= 35:
+                        sentiment_label = "偏空美元（日圓看升）"
+                    elif ai_score <= 45:
+                        sentiment_label = "溫和偏空美元"
+                    else:
+                        sentiment_label = "多空均衡（中性觀望）"
 
-                        # 醒目分數與進度條
-                        sc1, sc2 = st.columns([1, 1.4])
-                        with sc1:
-                            st.metric(label="AI 美元情緒指標", value=f"{ai_score} / 100")
-                        with sc2:
-                            st.markdown(f"**綜合市場風向：{sentiment_label}**")
-                            st.progress(ai_score / 100.0)
-                        
-                        st.write("")
-                        
-                        # 市場與輿論背離自動判讀
-                        if ai_score >= 70 and fx_chg_30d < -0.5:
-                            alert_msg = f"⚠️ **背離警訊（利多不漲）**：新聞情緒分數達 **{ai_score} 分**，但 USD/JPY 近 30 日逆勢下跌 **{fx_chg_30d:.2f}%**，顯示市場可能提前定價政策轉向或干預風險。"
-                            st.error(alert_msg)
-                            sidebar_alert_placeholder.error(alert_msg)
-                        elif ai_score <= 30 and fx_chg_30d > 0.5:
-                            alert_msg = f"⚠️ **背離警訊（利空不跌）**：新聞情緒分數僅 **{ai_score} 分**，但 USD/JPY 近 30 日逆勢上漲 **{fx_chg_30d:+.2f}%**，顯示實質利差買盤仍具支撐。"
-                            st.warning(alert_msg)
-                            sidebar_alert_placeholder.warning(alert_msg)
-                        else:
-                            sync_msg = f"✅ **輿論與價格走勢一致**：AI 情緒分數 **{ai_score} 分** 與近 30 日匯率變動（**{fx_chg_30d:+.2f}%**）方向相符。"
-                            st.success(sync_msg)
-                            sidebar_alert_placeholder.success(sync_msg)
-                        
-                        st.markdown(clean_report)
-                        
-                    except Exception as e:
-                        st.error(f"模型評估執行異常，請確認 API Key 或連線狀態：{e}")
+                    sc1, sc2 = st.columns([1, 1.4])
+                    with sc1:
+                        st.metric(label="AI 美元情緒指標", value=f"{ai_score} / 100")
+                    with sc2:
+                        st.markdown(f"**綜合市場風向：{sentiment_label}**")
+                        st.progress(ai_score / 100.0)
+                    
+                    st.write("")
+                    
+                    if ai_score >= 70 and fx_chg_30d < -0.5:
+                        alert_msg = f"⚠️ **背離警訊（利多不漲）**：新聞情緒分數達 **{ai_score} 分**，但 USD/JPY 近 30 日逆勢下跌 **{fx_chg_30d:.2f}%**，顯示市場可能提前定價政策轉向或干預風險。"
+                        st.error(alert_msg)
+                        sidebar_alert_placeholder.error(alert_msg)
+                    elif ai_score <= 30 and fx_chg_30d > 0.5:
+                        alert_msg = f"⚠️ **背離警訊（利空不跌）**：新聞情緒分數僅 **{ai_score} 分**，但 USD/JPY 近 30 日逆勢上漲 **{fx_chg_30d:+.2f}%**，顯示實質利差買盤仍具支撐。"
+                        st.warning(alert_msg)
+                        sidebar_alert_placeholder.warning(alert_msg)
+                    else:
+                        sync_msg = f"✅ **輿論與價格走勢一致**：AI 情緒分數 **{ai_score} 分** 與近 30 日匯率變動（**{fx_chg_30d:+.2f}%**）方向相符。"
+                        st.success(sync_msg)
+                        sidebar_alert_placeholder.success(sync_msg)
+                    
+                    st.markdown(clean_report)
+                    
+                except Exception as e:
+                    st.error(f"模型評估執行異常，請確認 API Key 或連線狀態：{e}")
 
 # ==================== 分頁 3：日圓換匯與日股連動分析 ====================
 with tab3:
