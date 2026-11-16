@@ -32,18 +32,24 @@ sidebar_alert_placeholder.info("尚未執行 AI 情緒分析，請切換至第 2
 
 # 3. 數據抓取函式庫
 @st.cache_data(ttl=3600)
-def fetch_usdjpy_data():
-    """抓取近 60 天 USD/JPY 匯率以計算精準的 30 個交易日漲跌幅"""
-    ticker = yf.Ticker("JPY=X")
-    df = ticker.history(period="60d")
-    if df.empty:
-        return None, 0.0, 0.0
+def fetch_market_data():
+    """抓取 USD/JPY、USD/TWD 匯率與日經 225 指數近 60 天數據"""
+    fx_jpy = yf.Ticker("JPY=X").history(period="60d")
+    fx_twd = yf.Ticker("TWD=X").history(period="5d")
+    nikkei = yf.Ticker("^N225").history(period="60d")
     
-    df_30 = df.tail(30).copy()
-    current_price = df_30['Close'].iloc[-1]
-    start_price = df_30['Close'].iloc[0]
-    pct_change_30d = ((current_price - start_price) / start_price) * 100
-    return df_30, current_price, pct_change_30d
+    if fx_jpy.empty:
+        return None, 0.0, 0.0, 32.5, None
+    
+    df_30 = fx_jpy.tail(30).copy()
+    current_jpy = df_30['Close'].iloc[-1]
+    start_jpy = df_30['Close'].iloc[0]
+    pct_change_30d = ((current_jpy - start_jpy) / start_jpy) * 100
+    
+    current_twd = fx_twd['Close'].iloc[-1] if not fx_twd.empty else 32.5
+    df_nikkei_30 = nikkei.tail(30).copy() if not nikkei.empty else None
+    
+    return df_30, current_jpy, pct_change_30d, current_twd, df_nikkei_30
 
 @st.cache_data(ttl=3600)
 def fetch_yield_spread(api_key):
@@ -75,9 +81,9 @@ def fetch_google_news(keyword="USD JPY Bank of Japan Fed"):
     return [entry.title for entry in feed.entries[:8]]
 
 def generate_ai_report(api_key, prompt):
-    """使用新版 google-genai SDK 呼叫模型，並內建備援切換避免 NotFound 或 429 錯誤"""
+    """使用最新 gemini-3.8-flash 模型呼叫 Gemini API"""
     client = genai.Client(api_key=api_key)
-    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+    models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash"]
     last_error = None
     for model_name in models_to_try:
         try:
@@ -92,10 +98,10 @@ def generate_ai_report(api_key, prompt):
     raise last_error
 
 # 4. 載入市場與總經數據
-df_fx, fx_now, fx_chg_30d = fetch_usdjpy_data()
+df_fx, fx_now, fx_chg_30d, usd_twd_now, df_nikkei = fetch_market_data()
 df_spread, us_yield, jp_yield = fetch_yield_spread(fred_key)
 
-# 5. 頂部常駐核心指標看板 (跨分頁皆可即時看到變化)
+# 5. 頂部常駐核心指標看板
 m1, m2, m3, m4 = st.columns(4)
 
 with m1:
@@ -147,7 +153,7 @@ st.divider()
 tab1, tab2, tab3 = st.tabs([
     "📊 1. 總經利差與匯率走勢",
     "🤖 2. AI 新聞情緒與背離判讀",
-    "🧭 3. 決策邏輯與互動壓力測試"
+    "💱 3. 日圓換匯與日股連動"
 ])
 
 # ==================== 分頁 1：總經利差與匯率走勢 ====================
@@ -233,7 +239,7 @@ with tab2:
                     f"- 美日 10Y 利差：{spread_str}\n"
                     f"- 額外分析要求：{extra_str}\n\n"
                     f"【嚴格輸出格式要求】\n"
-                    f"1. 請務必在回覆的「第一行」輸出情緒分數標籤，格式為 [SCORE: X]，其中 X 為 0 到 100 的整數。\n"
+                    f"1. 請務必在回覆的第一行輸出情緒分數標籤，格式為 [SCORE: X]，其中 X 為 0 到 100 的整數。\n"
                     f"   - 評分標準（以「美元走強 / 美日利差擴大」為利多方向）：\n"
                     f"     * 75~100：極度看多美元 / Fed極鷹或BoJ極鴿\n"
                     f"     * 55~74：溫和偏多美元\n"
@@ -310,32 +316,49 @@ with tab2:
                 except Exception as e:
                     st.error(f"AI 分析呼叫失敗，請確認 GEMINI_API_KEY 是否有效或額度是否已滿。錯誤訊息：{e}")
 
-# ==================== 分頁 3：決策邏輯與互動壓力測試 ====================
+# ==================== 分頁 3：日圓換匯與日股連動 ====================
 with tab3:
-    st.subheader("🧭 決策輔助判讀規則與模擬器")
-    st.markdown("""
-    本儀表板透過**「定量市場報酬（yfinance）」**與**「定性新聞情緒分數（Gemini NLP）」**的交叉比對，自動捕捉外匯市場常見的**預期差（Expectation Gap）**：
+    st.subheader("💱 即時台幣換日圓試算 & 日股連動觀察")
     
-    | 市場狀態分類 | AI 情緒分數條件 | USD/JPY 30日漲跌幅條件 | 經濟學與交易意涵 |
-    | :--- | :---: | :---: | :--- |
-    | **⚠️ 利多不漲背離** | $\ge 70$ 分（極度看多美元） | $< -0.5\%$（匯率走跌/日圓升） | 利多出盡，市場忌憚日本財務省進場干預或提前押注 BoJ 升息。 |
-    | **⚠️ 利空不跌背離** | $\le 30$ 分（極度看空美元） | $> +0.5\%$（匯率走升/日圓貶） | 儘管媒體渲染日銀升息，但美日實質利差過大，套利交易（Carry Trade）買盤仍強。 |
-    | **✅ 方向一致** | 介於兩者之間或同向變動 | 與情緒方向相符 | 市場價格已有效率地反映當前新聞基本面。 |
-    """)
+    col_calc, col_stock = st.columns([1, 1.2])
     
-    st.divider()
-    st.markdown("### 🎛️ 課堂展示用：背離警訊互動模擬器")
-    st.caption("課堂報告時，若當天新聞與匯率剛好同向，可用此滑桿向同學演示系統如何觸發背離警報：")
-    
-    sim_col1, sim_col2 = st.columns(2)
-    with sim_col1:
-        sim_score = st.slider("模擬 AI 新聞情緒分數 (0~100):", 0, 100, 80)
-    with sim_col2:
-        sim_fx = st.slider("模擬 USD/JPY 近 30 日漲跌幅 (%):", -5.0, 5.0, -1.8, step=0.1)
+    with col_calc:
+        st.markdown("### 🧮 旅遊 / 投資換匯試算機")
+        twd_amount = st.number_input("輸入想兌換的新台幣金額 (TWD):", min_value=1000, max_value=10000000, value=50000, step=5000)
         
-    if sim_score >= 70 and sim_fx < -0.5:
-        st.error(f"⚠️ **模擬觸發【利多不漲背離】**：AI 情緒高達 {sim_score} 分，但匯率下跌 {sim_fx:+.1f}%！")
-    elif sim_score <= 30 and sim_fx > 0.5:
-        st.warning(f"⚠️ **模擬觸發【利空不跌背離】**：AI 情緒僅 {sim_score} 分，但匯率上漲 {sim_fx:+.1f}%！")
-    else:
-        st.success(f"✅ **模擬結果【方向一致】**：AI 情緒 {sim_score} 分與匯率 {sim_fx:+.1f}% 無背離。")
+        if fx_now > 0:
+            # 透過 USD/TWD 與 USD/JPY 交叉計算台幣兌日圓即期匯率
+            jpy_to_twd = usd_twd_now / fx_now
+            jpy_received = twd_amount / jpy_to_twd
+            
+            # 比較 30 天前的匯率
+            start_jpy = df_fx['Close'].iloc[0] if df_fx is not None else fx_now
+            jpy_30d_ago = twd_amount / (usd_twd_now / start_jpy)
+            diff_jpy = jpy_received - jpy_30d_ago
+            
+            st.metric(
+                label="目前台幣兌日圓參考匯率 (1 JPY 換 TWD)",
+                value=f"{jpy_to_twd:.4f} 元",
+                delta=f"30天前可換 {jpy_30d_ago:,.0f} 円",
+                delta_color="off"
+            )
+            st.success(f"💰 **{twd_amount:,} 元台幣** 現在約可換得 **{jpy_received:,.0f} 日圓**（比 30 天前{'多換' if diff_jpy >= 0 else '少換'} **{abs(diff_jpy):,.0f} 日圓**）")
+        else:
+            st.warning("匯率資料讀取中，暫無法計算。")
+
+    with col_stock:
+        st.markdown("### 📈 日圓匯率 vs. 日經 225 指數連動")
+        if df_nikkei is not None:
+            fig_nk = px.line(
+                df_nikkei,
+                x=df_nikkei.index,
+                y="Close",
+                title="日本日經 225 指數 (^N225) 近 30 日走勢",
+                labels={"Close": "指數點位", "Date": "日期"}
+            )
+            fig_nk.update_traces(line_color="#00CC96", line_width=2.5)
+            fig_nk.update_layout(height=300, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig_nk, use_container_width=True)
+            st.caption("💡 經濟學小知識：日本以出口導向企業（如豐田、Sony）為主，通常「日圓貶值（USD/JPY 上漲）」有利日本出口商獲利，進而帶動日經指數上漲。")
+        else:
+            st.info("暫無日經指數資料。")
