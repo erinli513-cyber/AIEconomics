@@ -123,24 +123,21 @@ def fetch_google_news(keyword="USD JPY Bank of Japan Fed"):
     feed = feedparser.parse(url)
     return [entry.title for entry in feed.entries[:6]]
 
-def generate_formal_report_stream(api_key, prompt):
-    """使用低延遲模型並關閉內部思考延遲，以串流方式即時輸出"""
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=15000))
-    cfg = types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=250,
-        thinking_config=types.ThinkingConfig(thinking_budget=0)
-    )
-    for m in ["gemini-3.5-flash-lite", "gemini-3.8-flash"]:
-        try:
-            return client.models.generate_content_stream(model=m, contents=prompt, config=cfg)
-        except Exception:
+def stream_gemini_report(api_key, prompt):
+    """在 with 區塊內維持 client 連線生命週期，以生成器逐字吐出串流文字"""
+    with genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20000)) as client:
+        cfg = types.GenerateContentConfig(temperature=0.2, max_output_tokens=250)
+        last_err = None
+        for m in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
             try:
-                fallback_cfg = types.GenerateContentConfig(temperature=0.2, max_output_tokens=250)
-                return client.models.generate_content_stream(model=m, contents=prompt, config=fallback_cfg)
-            except Exception:
+                for chunk in client.models.generate_content_stream(model=m, contents=prompt, config=cfg):
+                    if chunk.text:
+                        yield chunk.text
+                return
+            except Exception as e:
+                last_err = e
                 continue
-    raise RuntimeError("無法連線至 Gemini 模型，請檢查 API Key 或網路狀態。")
+        raise last_err if last_err else RuntimeError("無法連線至 Gemini 模型，請檢查 API Key 或網路狀態。")
 
 # 5. 載入市場與總經數據
 df_fx, fx_now, fx_chg_30d, usd_twd_now, df_nikkei = fetch_market_data()
@@ -281,11 +278,10 @@ with tab2:
                 try:
                     stream_box = st.empty()
                     full_text = ""
-                    for chunk in generate_formal_report_stream(gemini_key, prompt):
-                        if chunk.text:
-                            full_text += chunk.text
-                            preview_text = re.sub(r"\[SCORE:\s*\d*\]?\s*", "", full_text)
-                            stream_box.markdown(preview_text + " ▌")
+                    for text_piece in stream_gemini_report(gemini_key, prompt):
+                        full_text += text_piece
+                        preview_text = re.sub(r"\[SCORE:\s*\d*\]?\s*", "", full_text)
+                        stream_box.markdown(preview_text + " ▌")
                     
                     score_match = re.search(r"\[SCORE:\s*(\d+)\]", full_text)
                     ai_score = int(score_match.group(1)) if score_match else 50
