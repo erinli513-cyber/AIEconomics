@@ -4,7 +4,7 @@ import plotly.express as px
 import yfinance as yf
 from fredapi import Fred
 import feedparser
-import google.generativeai as genai
+from google import genai
 from urllib.parse import quote
 import re
 
@@ -20,17 +20,15 @@ fred_key = st.secrets["FRED_API_KEY"] if "FRED_API_KEY" in st.secrets else st.si
 gemini_key = None
 if "GEMINI_API_KEY" in st.secrets:
     gemini_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=gemini_key)
 else:
     gemini_input = st.sidebar.text_input("請輸入 Gemini API Key:", type="password")
     if gemini_input:
         gemini_key = gemini_input
-        genai.configure(api_key=gemini_key)
 
 st.sidebar.divider()
 st.sidebar.subheader("📡 系統自動判讀狀態")
 sidebar_alert_placeholder = st.sidebar.empty()
-sidebar_alert_placeholder.info("尚未執行 AI 情緒分析，請點擊右側按鈕啟動背離偵測。")
+sidebar_alert_placeholder.info("尚未執行 AI 情緒分析，請切換至第 2 分頁啟動背離偵測。")
 
 # 3. 數據抓取函式庫
 @st.cache_data(ttl=3600)
@@ -76,12 +74,28 @@ def fetch_google_news(keyword="USD JPY Bank of Japan Fed"):
     feed = feedparser.parse(url)
     return [entry.title for entry in feed.entries[:8]]
 
+def generate_ai_report(api_key, prompt):
+    """使用新版 google-genai SDK 呼叫模型，並內建備援切換避免 NotFound 或 429 錯誤"""
+    client = genai.Client(api_key=api_key)
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            return response.text, model_name
+        except Exception as e:
+            last_error = e
+            continue
+    raise last_error
+
 # 4. 載入市場與總經數據
 df_fx, fx_now, fx_chg_30d = fetch_usdjpy_data()
 df_spread, us_yield, jp_yield = fetch_yield_spread(fred_key)
 
-# 5. 第一區塊：總經利差與匯率核心指標看板
-st.subheader("📊 總體經濟利差與匯率即時監控")
+# 5. 頂部常駐核心指標看板 (跨分頁皆可即時看到變化)
 m1, m2, m3, m4 = st.columns(4)
 
 with m1:
@@ -114,7 +128,7 @@ with m3:
     ai_score_metric.metric(
         label="今日 AI 美元/利差情緒分數",
         value="待分析",
-        delta="點擊下方按鈕啟動",
+        delta="請至分頁 2 啟動",
         delta_color="off"
     )
 
@@ -127,146 +141,201 @@ with m4:
         delta_color="off"
     )
 
-# 6. 第二區塊：雙軸走勢視覺化圖表
-chart_col1, chart_col2 = st.columns(2)
-
-with chart_col1:
-    if df_fx is not None:
-        fig_fx = px.line(
-            df_fx,
-            x=df_fx.index,
-            y="Close",
-            title="📈 USD/JPY 近 30 個交易日走勢圖",
-            labels={"Close": "匯率 (JPY)", "Date": "日期"}
-        )
-        fig_fx.update_traces(line_color="#FF4B4B", line_width=2.5)
-        fig_fx.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20))
-        st.plotly_chart(fig_fx, use_container_width=True)
-
-with chart_col2:
-    if df_spread is not None:
-        fig_sp = px.area(
-            df_spread,
-            x=df_spread.index,
-            y="Spread (美日利差)",
-            title="🏦 美日 10 年期公債殖利率利差趨勢 (FRED)",
-            labels={"Spread (美日利差)": "利差 (%)", "index": "日期"}
-        )
-        fig_sp.update_traces(line_color="#1f77b4")
-        fig_sp.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20))
-        st.plotly_chart(fig_sp, use_container_width=True)
-    else:
-        st.info("💡 在左側輸入 FRED_API_KEY 即可解鎖「美日 10 年期公債利差」歷史趨勢圖。")
-
 st.divider()
 
-# 7. 第三區塊：NLP 市場新聞情緒分析與背離自動判讀
-st.subheader("📰 即時外匯新聞與 AI 鷹鴿派情緒分析")
-col_kw, col_role = st.columns([1, 1])
-with col_kw:
-    search_kw = st.text_input("🔍 關注關鍵字 (預設美日央行與匯率):", value="USD JPY Bank of Japan Fed")
-with col_role:
-    analyst_role = st.selectbox("🎭 選擇 AI 分析師視角:", ["外匯與總體經濟策略師", "日本央行 (BoJ) 政策觀察家", "跨國企業匯率避險經理人"])
+# 6. 三大分頁設計
+tab1, tab2, tab3 = st.tabs([
+    "📊 1. 總經利差與匯率走勢",
+    "🤖 2. AI 新聞情緒與背離判讀",
+    "🧭 3. 決策邏輯與互動壓力測試"
+])
 
-custom_prompt = st.text_input("✍️ 自訂額外分析指令 (選填):", placeholder="例如：請評估日本財務省進場干預匯率 (Intervention) 的風險，以及對日股的影響...")
+# ==================== 分頁 1：總經利差與匯率走勢 ====================
+with tab1:
+    st.subheader("📈 市場價格與總體經濟殖利率利差")
+    chart_col1, chart_col2 = st.columns(2)
 
-news_titles = fetch_google_news(search_kw)
-c1, c2 = st.columns([1, 1.2])
-
-with c1:
-    st.markdown("### 📌 最新相關新聞標題 (Google News RSS)")
-    for i, title in enumerate(news_titles, 1):
-        st.write(f"**{i}.** {title}")
-
-with c2:
-    st.markdown("### 🤖 Gemini AI 情緒評分與背離判讀報告")
-    if not gemini_key:
-        st.warning("⚠️ 請先在左側邊欄輸入您的 GEMINI_API_KEY 以啟用 AI 分析。")
-    elif st.button("🚀 開始分析市場情緒與背離訊號", type="primary"):
-        with st.spinner("AI 正在比對新聞輿論與 USD/JPY 實際走勢..."):
-            news_text = "\n".join([f"- {t}" for t in news_titles])
-            spread_str = f"{us_yield - jp_yield:.2f}%" if (us_yield and jp_yield) else "未提供"
-            extra_str = custom_prompt if custom_prompt else "無"
-            
-            prompt = (
-                f"你是一位【{analyst_role}】。請針對以下 8 條關於「{search_kw}」的最新財經新聞進行深度剖析：\n"
-                f"{news_text}\n\n"
-                f"【當前客觀市場數據參考】\n"
-                f"- USD/JPY 近 30 日漲跌幅：{fx_chg_30d:+.2f}% （正值代表美元強/日圓貶；負值代表美元弱/日圓升）\n"
-                f"- 美日 10Y 利差：{spread_str}\n"
-                f"- 額外分析要求：{extra_str}\n\n"
-                f"【嚴格輸出格式要求】\n"
-                f"1. 請務必在回覆的第一行輸出情緒分數標籤，格式為 [SCORE: X]，其中 X 為 0 到 100 的整數。\n"
-                f"   - 評分標準（以「美元走強 / 美日利差擴大」為利多方向）：\n"
-                f"     * 75~100：極度看多美元 / Fed極鷹或BoJ極鴿\n"
-                f"     * 55~74：溫和偏多美元\n"
-                f"     * 45~54：中性觀望\n"
-                f"     * 25~44：溫和看空美元 / 日圓看升\n"
-                f"     * 0~24：極度看空美元 / BoJ升息預期強烈或干預風險極高\n"
-                f"2. 接著以繁體中文輸出結構化報告：\n"
-                f"   - **美日央行政策立場判定**（Fed 鷹鴿程度 vs. BoJ 升息/干預壓力）\n"
-                f"   - **市場與輿論背離深度解讀**（結合上方提供的 30 日匯率漲跌幅進行點評）\n"
-                f"   - **逐條新聞情緒評分與簡評**（以 Markdown 表格呈現）"
+    with chart_col1:
+        if df_fx is not None:
+            fig_fx = px.line(
+                df_fx,
+                x=df_fx.index,
+                y="Close",
+                title="USD/JPY 近 30 個交易日走勢圖 (yfinance)",
+                labels={"Close": "匯率 (JPY)", "Date": "日期"}
             )
-            
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            response = model.generate_content(prompt)
-            report_text = response.text
-            
-            # 8. 解析 AI 分數
-            score_match = re.search(r"\[SCORE:\s*(\d+)\]", report_text)
-            ai_score = int(score_match.group(1)) if score_match else 50
-            clean_report = re.sub(r"\[SCORE:\s*\d+\]\s*", "", report_text)
-            
-            # 更新上方 Metric 卡片
-            ai_score_metric.metric(
-                label="今日 AI 美元/利差情緒分數",
-                value=f"{ai_score} / 100 分",
-                delta="偏多美元 (鷹派)" if ai_score >= 60 else ("偏空美元 (日圓升)" if ai_score <= 40 else "中性震盪"),
-                delta_color="normal" if ai_score >= 60 else ("inverse" if ai_score <= 40 else "off")
+            fig_fx.update_traces(line_color="#FF4B4B", line_width=2.5)
+            fig_fx.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=20))
+            st.plotly_chart(fig_fx, use_container_width=True)
+        else:
+            st.warning("無法取得 USD/JPY 歷史資料。")
+
+    with chart_col2:
+        if df_spread is not None:
+            fig_sp = px.area(
+                df_spread,
+                x=df_spread.index,
+                y="Spread (美日利差)",
+                title="美日 10 年期公債殖利率利差趨勢 (FRED)",
+                labels={"Spread (美日利差)": "利差 (%)", "index": "日期"}
             )
-            
-            # 9. 情緒與市場背離自動判讀
-            if ai_score >= 70 and fx_chg_30d < -0.5:
-                alert_msg = (
-                    f"⚠️ **市場與輿論出現背離（利多不漲警訊）**\n\n"
-                    f"AI 新聞情緒高達 **{ai_score} 分**（極度看多美元），但 USD/JPY 近 30 日卻逆勢下跌 **{fx_chg_30d:.2f}%**。"
-                    f"市場可能正在提前定價日本央行升息或忌憚匯率干預，慎防追高風險！"
+            fig_sp.update_traces(line_color="#1f77b4")
+            fig_sp.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=20))
+            st.plotly_chart(fig_sp, use_container_width=True)
+        else:
+            st.info("💡 在左側輸入 FRED_API_KEY 即可顯示「美日 10 年期公債利差」歷史趨勢圖。")
+
+    with st.expander("📋 查看近期匯率與利差原始數據明細"):
+        d1, d2 = st.columns(2)
+        with d1:
+            if df_fx is not None:
+                st.write("**USD/JPY 近 10 日收盤數據**")
+                st.dataframe(df_fx[['Open', 'High', 'Low', 'Close']].tail(10).round(2), use_container_width=True)
+        with d2:
+            if df_spread is not None:
+                st.write("**美日 10 年期公債殖利率近 10 筆數據**")
+                st.dataframe(df_spread.tail(10).round(2), use_container_width=True)
+
+# ==================== 分頁 2：AI 新聞情緒與背離判讀 ====================
+with tab2:
+    st.subheader("📰 即時外匯新聞與 AI 鷹鴿派情緒分析")
+    col_kw, col_role = st.columns([1, 1])
+    with col_kw:
+        search_kw = st.text_input("🔍 關注關鍵字 (預設美日央行與匯率):", value="USD JPY Bank of Japan Fed")
+    with col_role:
+        analyst_role = st.selectbox("🎭 選擇 AI 分析師視角:", ["外匯與總體經濟策略師", "日本央行 (BoJ) 政策觀察家", "跨國企業匯率避險經理人"])
+
+    custom_prompt = st.text_input("✍️ 自訂額外分析指令 (選填):", placeholder="例如：請評估日本財務省在 160 關口進場干預匯率 (Intervention) 的風險...")
+
+    news_titles = fetch_google_news(search_kw)
+    c1, c2 = st.columns([1, 1.3])
+
+    with c1:
+        st.markdown("### 📌 最新相關新聞標題 (Google News RSS)")
+        for i, title in enumerate(news_titles, 1):
+            st.write(f"**{i}.** {title}")
+
+    with c2:
+        st.markdown("### 🤖 Gemini AI 情緒評分與背離判讀報告")
+        if not gemini_key:
+            st.warning("⚠️ 請先在左側邊欄輸入您的 GEMINI_API_KEY 以啟用 AI 分析。")
+        elif st.button("🚀 開始分析市場情緒與背離訊號", type="primary"):
+            with st.spinner("AI 正在比對新聞輿論與 USD/JPY 實際走勢..."):
+                news_text = "\n".join([f"- {t}" for t in news_titles])
+                spread_str = f"{us_yield - jp_yield:.2f}%" if (us_yield and jp_yield) else "未提供"
+                extra_str = custom_prompt if custom_prompt else "無"
+                
+                prompt = (
+                    f"你是一位【{analyst_role}】。請針對以下 8 條關於「{search_kw}」的最新財經新聞進行深度剖析：\n"
+                    f"{news_text}\n\n"
+                    f"【當前客觀市場數據參考】\n"
+                    f"- USD/JPY 近 30 日漲跌幅：{fx_chg_30d:+.2f}% （正值代表美元強/日圓貶；負值代表美元弱/日圓升）\n"
+                    f"- 美日 10Y 利差：{spread_str}\n"
+                    f"- 額外分析要求：{extra_str}\n\n"
+                    f"【嚴格輸出格式要求】\n"
+                    f"1. 請務必在回覆的「第一行」輸出情緒分數標籤，格式為 [SCORE: X]，其中 X 為 0 到 100 的整數。\n"
+                    f"   - 評分標準（以「美元走強 / 美日利差擴大」為利多方向）：\n"
+                    f"     * 75~100：極度看多美元 / Fed極鷹或BoJ極鴿\n"
+                    f"     * 55~74：溫和偏多美元\n"
+                    f"     * 45~54：中性觀望\n"
+                    f"     * 25~44：溫和看空美元 / 日圓看升\n"
+                    f"     * 0~24：極度看空美元 / BoJ升息預期強烈或干預風險極高\n"
+                    f"2. 接著以繁體中文輸出結構化報告：\n"
+                    f"   - **美日央行政策立場判定**（Fed 鷹鴿程度 vs. BoJ 升息/干預壓力）\n"
+                    f"   - **市場與輿論背離深度解讀**（結合上方提供的 30 日匯率漲跌幅進行點評）\n"
+                    f"   - **逐條新聞情緒評分與簡評**（以 Markdown 表格呈現）"
                 )
-                st.error(alert_msg)
-                sidebar_alert_placeholder.error(alert_msg)
-                divergence_metric.metric(
-                    label="市場與輿論背離狀態",
-                    value="⚠️ 利多不漲背離",
-                    delta="新聞樂觀但匯率走跌",
-                    delta_color="inverse"
-                )
-            elif ai_score <= 30 and fx_chg_30d > 0.5:
-                alert_msg = (
-                    f"⚠️ **市場與輿論出現背離（利空不跌警訊）**\n\n"
-                    f"AI 新聞情緒僅 **{ai_score} 分**（看空美元），但 USD/JPY 近 30 日卻上漲 **{fx_chg_30d:+.2f}%**。"
-                    f"顯示美日實際利差買盤依然強勁，日圓空頭尚未退場。"
-                )
-                st.warning(alert_msg)
-                sidebar_alert_placeholder.warning(alert_msg)
-                divergence_metric.metric(
-                    label="市場與輿論背離狀態",
-                    value="⚠️ 利空不跌背離",
-                    delta="新聞悲觀但匯率走升",
-                    delta_color="normal"
-                )
-            else:
-                sync_msg = (
-                    f"✅ **市場走勢與新聞輿論一致**\n\n"
-                    f"AI 情緒分數為 **{ai_score} 分**，與 USD/JPY 近 30 日漲跌幅（**{fx_chg_30d:+.2f}%**）方向相符，無明顯背離訊號。"
-                )
-                st.success(sync_msg)
-                sidebar_alert_placeholder.success(sync_msg)
-                divergence_metric.metric(
-                    label="市場與輿論背離狀態",
-                    value="✅ 方向一致",
-                    delta="無明顯背離訊號",
-                    delta_color="off"
-                )
-            
-            st.markdown(clean_report)
+                
+                try:
+                    report_text, used_model = generate_ai_report(gemini_key, prompt)
+                    
+                    score_match = re.search(r"\[SCORE:\s*(\d+)\]", report_text)
+                    ai_score = int(score_match.group(1)) if score_match else 50
+                    clean_report = re.sub(r"\[SCORE:\s*\d+\]\s*", "", report_text)
+                    
+                    # 更新頂部 Metric 卡片
+                    ai_score_metric.metric(
+                        label="今日 AI 美元/利差情緒分數",
+                        value=f"{ai_score} / 100 分",
+                        delta="偏多美元 (鷹派)" if ai_score >= 60 else ("偏空美元 (日圓升)" if ai_score <= 40 else "中性震盪"),
+                        delta_color="normal" if ai_score >= 60 else ("inverse" if ai_score <= 40 else "off")
+                    )
+                    
+                    # 情緒與市場背離自動判讀
+                    if ai_score >= 70 and fx_chg_30d < -0.5:
+                        alert_msg = (
+                            f"⚠️ **市場與輿論出現背離（利多不漲警訊）**\n\n"
+                            f"AI 新聞情緒高達 **{ai_score} 分**（極度看多美元），但 USD/JPY 近 30 日卻逆勢下跌 **{fx_chg_30d:.2f}%**。"
+                            f"市場可能正在提前定價日本央行升息或忌憚匯率干預，慎防追高風險！"
+                        )
+                        st.error(alert_msg)
+                        sidebar_alert_placeholder.error(alert_msg)
+                        divergence_metric.metric(
+                            label="市場與輿論背離狀態",
+                            value="⚠️ 利多不漲背離",
+                            delta="新聞樂觀但匯率走跌",
+                            delta_color="inverse"
+                        )
+                    elif ai_score <= 30 and fx_chg_30d > 0.5:
+                        alert_msg = (
+                            f"⚠️ **市場與輿論出現背離（利空不跌警訊）**\n\n"
+                            f"AI 新聞情緒僅 **{ai_score} 分**（看空美元），但 USD/JPY 近 30 日卻上漲 **{fx_chg_30d:+.2f}%**。"
+                            f"顯示美日實際利差買盤依然強勁，日圓空頭尚未退場。"
+                        )
+                        st.warning(alert_msg)
+                        sidebar_alert_placeholder.warning(alert_msg)
+                        divergence_metric.metric(
+                            label="市場與輿論背離狀態",
+                            value="⚠️ 利空不跌背離",
+                            delta="新聞悲觀但匯率走升",
+                            delta_color="normal"
+                        )
+                    else:
+                        sync_msg = (
+                            f"✅ **市場走勢與新聞輿論一致**\n\n"
+                            f"AI 情緒分數為 **{ai_score} 分**，與 USD/JPY 近 30 日漲跌幅（**{fx_chg_30d:+.2f}%**）方向相符，無明顯背離訊號。"
+                        )
+                        st.success(sync_msg)
+                        sidebar_alert_placeholder.success(sync_msg)
+                        divergence_metric.metric(
+                            label="市場與輿論背離狀態",
+                            value="✅ 方向一致",
+                            delta="無明顯背離訊號",
+                            delta_color="off"
+                        )
+                    
+                    st.caption(f"使用模型：`{used_model}`")
+                    st.markdown(clean_report)
+                    
+                except Exception as e:
+                    st.error(f"AI 分析呼叫失敗，請確認 GEMINI_API_KEY 是否有效或額度是否已滿。錯誤訊息：{e}")
+
+# ==================== 分頁 3：決策邏輯與互動壓力測試 ====================
+with tab3:
+    st.subheader("🧭 決策輔助判讀規則與模擬器")
+    st.markdown("""
+    本儀表板透過**「定量市場報酬（yfinance）」**與**「定性新聞情緒分數（Gemini NLP）」**的交叉比對，自動捕捉外匯市場常見的**預期差（Expectation Gap）**：
+    
+    | 市場狀態分類 | AI 情緒分數條件 | USD/JPY 30日漲跌幅條件 | 經濟學與交易意涵 |
+    | :--- | :---: | :---: | :--- |
+    | **⚠️ 利多不漲背離** | $\ge 70$ 分（極度看多美元） | $< -0.5\%$（匯率走跌/日圓升） | 利多出盡，市場忌憚日本財務省進場干預或提前押注 BoJ 升息。 |
+    | **⚠️ 利空不跌背離** | $\le 30$ 分（極度看空美元） | $> +0.5\%$（匯率走升/日圓貶） | 儘管媒體渲染日銀升息，但美日實質利差過大，套利交易（Carry Trade）買盤仍強。 |
+    | **✅ 方向一致** | 介於兩者之間或同向變動 | 與情緒方向相符 | 市場價格已有效率地反映當前新聞基本面。 |
+    """)
+    
+    st.divider()
+    st.markdown("### 🎛️ 課堂展示用：背離警訊互動模擬器")
+    st.caption("課堂報告時，若當天新聞與匯率剛好同向，可用此滑桿向同學演示系統如何觸發背離警報：")
+    
+    sim_col1, sim_col2 = st.columns(2)
+    with sim_col1:
+        sim_score = st.slider("模擬 AI 新聞情緒分數 (0~100):", 0, 100, 80)
+    with sim_col2:
+        sim_fx = st.slider("模擬 USD/JPY 近 30 日漲跌幅 (%):", -5.0, 5.0, -1.8, step=0.1)
+        
+    if sim_score >= 70 and sim_fx < -0.5:
+        st.error(f"⚠️ **模擬觸發【利多不漲背離】**：AI 情緒高達 {sim_score} 分，但匯率下跌 {sim_fx:+.1f}%！")
+    elif sim_score <= 30 and sim_fx > 0.5:
+        st.warning(f"⚠️ **模擬觸發【利空不跌背離】**：AI 情緒僅 {sim_score} 分，但匯率上漲 {sim_fx:+.1f}%！")
+    else:
+        st.success(f"✅ **模擬結果【方向一致】**：AI 情緒 {sim_score} 分與匯率 {sim_fx:+.1f}% 無背離。")
